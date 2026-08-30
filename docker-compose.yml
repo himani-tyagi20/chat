@@ -29,17 +29,23 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["ollama", "pull", "qwen2.5"]
+    # Same variable the app uses, so the pulled model and the requested one can't drift apart.
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen2.5}"]
     restart: "no"
 
   app:
     build: .
     ports:
-      - "8000:8000"
+      - "${APP_PORT:-8000}:8000"
     environment:
-      QDRANT_URL: http://qdrant:6333
-      OLLAMA_URL: http://ollama:11434
-      OLLAMA_MODEL: qwen2.5
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5}
+      MIN_SCORE: ${MIN_SCORE:-0.62}
+      TOP_K: ${TOP_K:-5}
+      CHUNK_CHARS: ${CHUNK_CHARS:-1000}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-150}
+      EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-small-en-v1.5}
     depends_on:
       qdrant:
         condition: service_healthy

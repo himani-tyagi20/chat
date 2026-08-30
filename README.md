@@ -24,24 +24,74 @@ from, so you can always see where a claim originated.
 
 ## Docker (app + Qdrant + Ollama)
 
+Everything runs in containers — no Python, no Ollama, no Qdrant needed on the host.
+
+```bash
+cp .env.example .env
+```
+
 ```bash
 docker compose up -d
 ```
 
-Three services plus a one-shot `ollama-pull` that fetches the model into a named volume and exits.
-The app is on http://localhost:8000; Qdrant and Ollama stay on the internal network.
+Open http://localhost:8000.
 
-The first `up` downloads qwen2.5 (~4.7 GB) — watch it with `docker compose logs -f ollama-pull`.
-Until it lands, LLM mode answers extractively and says so rather than failing. `ollama list` shows
-nothing until the pull is fully complete, which is expected mid-download.
+That starts four things: the **app**, **Qdrant**, **Ollama**, and a one-shot **`ollama-pull`** that
+downloads the model into a named volume and exits. Only the app is published; Qdrant and Ollama stay
+on the internal network.
+
+**The first run downloads qwen2.5 (~4.7 GB)** — that's the slow part, not the app.
 
 ```bash
-docker compose logs -f app     # service logs
-docker compose down            # stop; add -v to also drop the model and Qdrant data
+docker compose logs -f ollama-pull
 ```
 
-Qdrant data and the Ollama model persist in named volumes, so a restart doesn't re-download or lose
-indexed documents — unlike the local run, where vectors are in-memory.
+Until it finishes, LLM mode answers extractively and tags the reply `LLM UNAVAILABLE` rather than
+failing. `ollama list` shows nothing until the pull is fully complete — expected mid-download, not an
+error. Confirm it landed with:
+
+```bash
+docker compose exec ollama ollama list
+```
+
+Everyday commands:
+
+```bash
+docker compose ps                  # what's running
+docker compose logs -f app         # app logs
+docker compose up -d --build app   # rebuild after a code change
+docker compose restart app         # restart without rebuilding
+docker compose down                # stop everything
+docker compose down -v             # stop and delete the model + indexed documents
+```
+
+Qdrant data and the downloaded model live in named volumes, so restarts don't re-download the model
+or lose indexed documents — unlike the local run, where vectors are in-memory.
+
+### Configuration via `.env`
+
+Copy [`.env.example`](.env.example) to `.env` and edit — Compose reads it automatically. Every value
+is optional and falls back to the same default. `.env` itself is gitignored.
+
+```bash
+MIN_SCORE=0.62                     # cosine floor for "in the document"; lower = fewer abstentions
+TOP_K=5                            # chunks retrieved per question
+CHUNK_CHARS=1000                   # chunk window, in characters
+CHUNK_OVERLAP=150                  # overlap between chunks
+EMBED_MODEL=BAAI/bge-small-en-v1.5 # any fastembed ONNX model
+OLLAMA_MODEL=qwen2.5               # open-source model for LLM mode
+APP_PORT=8000                      # host port the app is published on
+```
+
+`OLLAMA_MODEL` drives both the app and the pull, so they can't drift apart. To use the smaller 1.9 GB
+model instead of the 4.7 GB default — plenty, since retrieval does the work, not the model:
+
+```bash
+echo "OLLAMA_MODEL=qwen2.5:3b" >> .env && docker compose up -d
+```
+
+Changing `CHUNK_*` or `EMBED_MODEL` only affects documents ingested afterwards; re-upload anything
+indexed under the old settings.
 
 ## Two answer modes
 
