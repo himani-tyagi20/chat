@@ -22,6 +22,27 @@ lives for that browser session; "New PDF" clears it.
 Every answer is tagged with the mode that produced it (`extracted` or `LLM`) and the pages it came
 from, so you can always see where a claim originated.
 
+## Docker (app + Qdrant + Ollama)
+
+```bash
+docker compose up -d
+```
+
+Three services plus a one-shot `ollama-pull` that fetches the model into a named volume and exits.
+The app is on http://localhost:8000; Qdrant and Ollama stay on the internal network.
+
+The first `up` downloads qwen2.5 (~4.7 GB) — watch it with `docker compose logs -f ollama-pull`.
+Until it lands, LLM mode answers extractively and says so rather than failing. `ollama list` shows
+nothing until the pull is fully complete, which is expected mid-download.
+
+```bash
+docker compose logs -f app     # service logs
+docker compose down            # stop; add -v to also drop the model and Qdrant data
+```
+
+Qdrant data and the Ollama model persist in named volumes, so a restart doesn't re-download or lose
+indexed documents — unlike the local run, where vectors are in-memory.
+
 ## Two answer modes
 
 Toggle in the UI, or send `"mode"` in the API call.

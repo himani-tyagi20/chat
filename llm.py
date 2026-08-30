@@ -88,11 +88,20 @@ class OllamaLLM:
         self.model, self.url, self.timeout = model, url.rstrip("/"), timeout
 
     def available(self) -> bool:
+        """A reachable server is not enough — the model itself must be pulled.
+
+        Ollama answers /api/tags happily while holding no models at all, then 404s on
+        /api/chat. Checking only reachability turns a still-downloading model into a 500.
+        """
         try:
-            urllib.request.urlopen(f"{self.url}/api/tags", timeout=2).read()
-            return True
+            body = urllib.request.urlopen(f"{self.url}/api/tags", timeout=2).read()
         except (urllib.error.URLError, OSError):
             return False
+        names = {m.get("name", "") for m in json.loads(body).get("models", [])}
+        # "qwen2.5" should match the "qwen2.5:latest" that `ollama pull qwen2.5` installs.
+        return self.model in names or (
+            ":" not in self.model and any(n.split(":")[0] == self.model for n in names)
+        )
 
     def answer(self, question: str, chunks: list[dict]) -> str:
         payload = json.dumps(

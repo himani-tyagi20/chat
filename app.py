@@ -1,5 +1,6 @@
 """Real-time PDF ingestion -> Qdrant vectors -> grounded, cited answers."""
 
+import logging
 import os
 import re
 import uuid
@@ -12,7 +13,9 @@ from fastembed import TextEmbedding
 from pypdf import PdfReader
 from qdrant_client import QdrantClient, models
 
-from llm import NO_ANSWER, get_llm
+from llm import NO_ANSWER, StubLLM, get_llm
+
+log = logging.getLogger("uvicorn.error")
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-small-en-v1.5")  # ONNX, runs locally
 CHUNK_CHARS = int(os.getenv("CHUNK_CHARS", 1000))
@@ -118,7 +121,16 @@ def answer(req: AnswerRequest):
         {"text": h.payload["text"], "page": h.payload["page"], "chunk_id": h.payload["chunk_id"]}
         for h in hits
     ]
-    text = llm.answer(req.question, chunks)
+    try:
+        text = llm.answer(req.question, chunks)
+    except Exception:
+        # The model can still vanish between the availability check and the call: pulled
+        # halfway, deleted, Ollama restarting, generation timing out. Degrading to the
+        # extractive answer beats 500ing on what is an optional enhancement.
+        log.warning("llm mode failed, falling back to extract", exc_info=True)
+        llm, mode = StubLLM(), "extract"
+        text = llm.answer(req.question, chunks)
+
     if not text or NO_ANSWER in text:
         return _abstain(mode)
 

@@ -92,6 +92,20 @@
   const $ = (id) => document.getElementById(id);
   let docId = null;
 
+  // A 500 returns plain text, not JSON — r.json() would throw "Unexpected token 'I'"
+  // and bury the actual server error. Surface the status instead.
+  async function parse(r) {
+    const body = await r.text();
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      throw new Error(`server error ${r.status}: ${body.slice(0, 120)}`);
+    }
+    if (!r.ok) throw new Error(data.detail || `request failed (${r.status})`);
+    return data;
+  }
+
   // ---- upload ----
   const drop = $("drop");
   drop.onclick = () => $("file").click();
@@ -110,9 +124,7 @@
     const body = new FormData();
     body.append("file", file);
     try {
-      const r = await fetch("/ingest", { method: "POST", body });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || "upload failed");
+      const data = await parse(await fetch("/ingest", { method: "POST", body }));
       docId = data.doc_id;
       $("docName").textContent = file.name;
       $("docStats").textContent = `${data.pages} pages · ${data.chunks} chunks`;
@@ -158,13 +170,11 @@
     const pending = add("a", "…");
     $("send").disabled = true;
     try {
-      const r = await fetch("/answer", {
+      const data = await parse(await fetch("/answer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ doc_id: docId, question, mode }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || "request failed");
+      }));
       render(pending, data, mode);
     } catch (err) {
       pending.textContent = err.message;

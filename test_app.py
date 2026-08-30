@@ -2,6 +2,7 @@
 
 import io
 import textwrap
+import urllib.error
 
 import pytest
 from fastapi.testclient import TestClient
@@ -146,6 +147,47 @@ def test_reasoning_citations_do_not_leak(client_and_doc, monkeypatch):
     ).json()
     assert "<think>" not in body["answer"]
     assert [c["chunk_id"] for c in body["citations"]] == ["c-0001"]
+
+
+@pytest.mark.parametrize(
+    "tags,model,expected",
+    [
+        ({"models": []}, "qwen2.5", False),  # server up, nothing pulled -> the 404 case
+        ({"models": [{"name": "qwen2.5:latest"}]}, "qwen2.5", True),  # bare name matches :latest
+        ({"models": [{"name": "qwen2.5:14b"}]}, "qwen2.5", True),
+        ({"models": [{"name": "qwen2.5:7b"}]}, "qwen2.5:14b", False),  # wrong tag is not a match
+        ({"models": [{"name": "llama3.2:latest"}]}, "qwen2.5", False),
+    ],
+)
+def test_available_requires_the_model_not_just_the_server(monkeypatch, tags, model, expected):
+    import io as _io
+    import json as _json
+
+    from llm import OllamaLLM
+
+    monkeypatch.setattr(
+        "llm.urllib.request.urlopen",
+        lambda *a, **k: _io.BytesIO(_json.dumps(tags).encode()),
+    )
+    assert OllamaLLM(model=model).available() is expected
+
+
+def test_llm_transport_failure_degrades_instead_of_500(client_and_doc, monkeypatch):
+    """Model vanishing mid-flight must not surface as an Internal Server Error."""
+    monkeypatch.setattr("llm.OllamaLLM.available", lambda self: True)
+
+    def boom(self, q, chunks):
+        raise urllib.error.HTTPError("http://ollama/api/chat", 404, "Not Found", {}, None)
+
+    monkeypatch.setattr("llm.OllamaLLM.answer", boom)
+    client, doc_id = client_and_doc
+    r = client.post(
+        "/answer", json={"doc_id": doc_id, "question": "What is the refund window?", "mode": "llm"}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mode"] == "extract" and body["abstained"] is False
+    assert "30 days" in body["answer"]
 
 
 def test_frontend_is_served(client_and_doc):
