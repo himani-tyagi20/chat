@@ -14,7 +14,7 @@ from typing import Protocol
 NO_ANSWER = "NO_ANSWER"
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5")
 
 SYSTEM = """You answer strictly from the numbered excerpts given to you.
 Rules:
@@ -38,6 +38,17 @@ def _sentences(text: str) -> list[str]:
 def _tokens(text: str) -> set[str]:
     """Content words only — stopwords would make overlap counts meaningless."""
     return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 2 and w not in STOP}
+
+
+def strip_thinking(text: str) -> str:
+    """Reasoning models (qwen3, deepseek-r1) prepend <think>…</think>; it is not the answer.
+
+    Left unstripped it would leak into the response and, worse, its chunk ids would be parsed
+    as citations for reasoning the model discarded.
+    """
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"^.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)  # unclosed opener
+    return text.strip()
 
 
 def format_excerpts(chunks: list[dict]) -> str:
@@ -102,7 +113,7 @@ class OllamaLLM:
             f"{self.url}/api/chat", data=payload, headers={"Content-Type": "application/json"}
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            return json.loads(resp.read())["message"]["content"].strip()
+            return strip_thinking(json.loads(resp.read())["message"]["content"])
 
 
 def get_llm(mode: str) -> tuple[LLM, str]:

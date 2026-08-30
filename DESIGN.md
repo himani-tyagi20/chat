@@ -43,7 +43,7 @@ Three gates, and the answer must pass all of them.
    - `extract` (default, `StubLLM`) scores each sentence of each retrieved chunk by content-word
      overlap with the question and returns the best two **verbatim**, tagged with their chunk ids.
      It cannot invent a fact because it only copies, and it needs no model at all.
-   - `llm` (`OllamaLLM`) sends the same chunks to a local open-source model (llama3.2 by default) at
+   - `llm` (`OllamaLLM`) sends the same chunks to a local open-source model (qwen2.5 by default) at
      temperature 0, under a system prompt restricting it to the excerpts and requiring `[c-NNNN]`
      markers. Ollama's HTTP API is called with `urllib` — no SDK dependency.
 3. **Citation.** After generation, citation markers are parsed out of the answer and intersected with

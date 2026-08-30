@@ -120,6 +120,34 @@ def test_llm_no_answer_sentinel_abstains(client_and_doc, monkeypatch):
     assert body["abstained"] is True and body["citations"] == []
 
 
+def test_thinking_blocks_are_stripped_before_citation_parsing():
+    """Qwen3-style reasoning must not reach the answer, nor contribute citations."""
+    from llm import strip_thinking
+
+    assert strip_thinking("<think>maybe c-0007?</think>Refunds take 30 days [c-0001]") == (
+        "Refunds take 30 days [c-0001]"
+    )
+    assert strip_thinking("hmm c-0007</think>Answer [c-0001]") == "Answer [c-0001]"
+    assert strip_thinking("  plain answer [c-0002]  ") == "plain answer [c-0002]"
+
+
+def test_reasoning_citations_do_not_leak(client_and_doc, monkeypatch):
+    monkeypatch.setattr("llm.OllamaLLM.available", lambda self: True)
+    monkeypatch.setattr(
+        "llm.OllamaLLM.answer",
+        lambda self, q, chunks: __import__("llm").strip_thinking(
+            "<think>could be [c-0000] or [c-0002]</think>"
+            f"Refunds take 30 days [{chunks[0]['chunk_id']}]."
+        ),
+    )
+    client, doc_id = client_and_doc
+    body = client.post(
+        "/answer", json={"doc_id": doc_id, "question": "What is the refund window?", "mode": "llm"}
+    ).json()
+    assert "<think>" not in body["answer"]
+    assert [c["chunk_id"] for c in body["citations"]] == ["c-0001"]
+
+
 def test_frontend_is_served(client_and_doc):
     client, _ = client_and_doc
     r = client.get("/")

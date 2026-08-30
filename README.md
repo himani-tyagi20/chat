@@ -34,11 +34,19 @@ Toggle in the UI, or send `"mode"` in the API call.
 For `llm` mode, install [Ollama](https://ollama.com) and pull any open-source model:
 
 ```bash
-ollama pull llama3.2
+ollama pull qwen2.5
 ```
 
 Nothing to configure — the service finds it on `localhost:11434`. Point elsewhere with `OLLAMA_URL`,
-or choose another model (`qwen2.5`, `mistral`, `phi3`…) with `OLLAMA_MODEL`.
+or choose another model with `OLLAMA_MODEL` — any Ollama tag works:
+
+```bash
+OLLAMA_MODEL=qwen2.5:14b .venv/bin/uvicorn app:app --port 8000
+```
+
+Reasoning variants (`qwen3`, `deepseek-r1`) are supported too: their `<think>` blocks are stripped
+before the answer is returned, so discarded reasoning can't leak into the response or be mistaken for
+a citation.
 
 If `llm` is requested and no model is reachable, the request still answers in `extract` mode and the
 response says so (`"mode": "extract"`) rather than failing.
@@ -102,7 +110,7 @@ All optional, via environment variables.
 | `EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Any fastembed ONNX model. |
 | `QDRANT_URL` | _(unset)_ | Point at a Qdrant server; unset uses the embedded local instance. |
 | `OLLAMA_URL` | `http://localhost:11434` | Where to reach Ollama for `llm` mode. |
-| `OLLAMA_MODEL` | `llama3.2` | Which open-source model to use. |
+| `OLLAMA_MODEL` | `qwen2.5` | Which open-source model to use. |
 
 ## Layout
 
