@@ -3,8 +3,10 @@
 import os
 import re
 import uuid
+from typing import Literal
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from fastembed import TextEmbedding
 from pypdf import PdfReader
@@ -27,7 +29,6 @@ app = FastAPI(title="OneRx PDF RAG")
 qdrant = QdrantClient(url=os.getenv("QDRANT_URL")) if os.getenv("QDRANT_URL") else QdrantClient(":memory:")
 
 embedder = TextEmbedding(EMBED_MODEL)  # ONNX runtime, no torch, cached on first run
-llm = get_llm()
 
 
 def chunk_page(text: str) -> list[str]:
@@ -54,6 +55,12 @@ def chunk_page(text: str) -> list[str]:
 class AnswerRequest(BaseModel):
     doc_id: str
     question: str
+    mode: Literal["extract", "llm"] = "extract"
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"))
 
 
 @app.post("/ingest")
@@ -103,33 +110,36 @@ def answer(req: AnswerRequest):
         collection_name=collection, query=qvec.tolist(), limit=TOP_K, with_payload=True
     ).points
     hits = [h for h in hits if h.score >= MIN_SCORE]
+    llm, mode = get_llm(req.mode)
     if not hits:
-        return _abstain()
+        return _abstain(mode)
 
     chunks = [
         {"text": h.payload["text"], "page": h.payload["page"], "chunk_id": h.payload["chunk_id"]}
         for h in hits
     ]
     text = llm.answer(req.question, chunks)
-    if not text or text.strip() == NO_ANSWER:
-        return _abstain()
+    if not text or NO_ANSWER in text:
+        return _abstain(mode)
 
     # Grounding gate: keep only citations that point at chunks we actually retrieved.
     cited = set(re.findall(r"c-\d{4}", text)) & {c["chunk_id"] for c in chunks}
     if not cited:
-        return _abstain()
+        return _abstain(mode)
     return {
         "answer": text,
         "citations": [
             {"page": c["page"], "chunk_id": c["chunk_id"]} for c in chunks if c["chunk_id"] in cited
         ],
         "abstained": False,
+        "mode": mode,
     }
 
 
-def _abstain():
+def _abstain(mode: str):
     return {
         "answer": "The document does not contain enough information to answer that.",
         "citations": [],
         "abstained": True,
+        "mode": mode,
     }

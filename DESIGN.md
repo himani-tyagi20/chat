@@ -39,17 +39,28 @@ Three gates, and the answer must pass all of them.
 
 1. **Retrieval.** The model only ever sees chunks retrieved from the requested `doc_id`'s collection.
 2. **Generation.** The `LLM` interface takes `(question, chunks)` — there is no path by which
-   untethered text reaches the model. The default `StubLLM` is extractive: it scores each sentence of
-   each retrieved chunk by token overlap with the question and returns the best two **verbatim**,
-   each tagged with its chunk id. It cannot invent a fact because it only copies. The optional
-   `ClaudeLLM` gets a system prompt restricting it to the excerpts and requiring `[c-NNNN]` markers.
+   untethered text reaches a model. The two modes sit behind it:
+   - `extract` (default, `StubLLM`) scores each sentence of each retrieved chunk by content-word
+     overlap with the question and returns the best two **verbatim**, tagged with their chunk ids.
+     It cannot invent a fact because it only copies, and it needs no model at all.
+   - `llm` (`OllamaLLM`) sends the same chunks to a local open-source model (llama3.2 by default) at
+     temperature 0, under a system prompt restricting it to the excerpts and requiring `[c-NNNN]`
+     markers. Ollama's HTTP API is called with `urllib` — no SDK dependency.
 3. **Citation.** After generation, citation markers are parsed out of the answer and intersected with
    the ids actually retrieved. Anything else is discarded. If nothing survives, the response abstains
    instead of returning an uncited claim.
 
-Gate 3 is what keeps grounding honest when the stub is swapped for a real model: a hallucinated
-citation points at a chunk that was never retrieved, so it is dropped, and an answer with no valid
-citation left becomes an abstention.
+Gate 3 is what keeps grounding honest in `llm` mode: a hallucinated citation points at a chunk that
+was never retrieved, so it is dropped, and an answer with no valid citation left becomes an
+abstention. This is the gate that matters most, because it is the only one a generative model can
+actually fail — it is covered by a test that feeds a fabricated `[c-9999]` through and asserts it
+does not reach the response.
+
+The two modes exist because they fail differently, and the choice is the user's: `extract` is
+incapable of hallucinating but reads like a quotation; `llm` is fluent but is only as grounded as the
+gates around it. `extract` is the default, and it is also the fallback — if `llm` is requested and no
+model is reachable, the request is answered extractively and the response reports `"mode": "extract"`
+rather than erroring. Degrading to the more conservative mode is the right direction to fail in.
 
 ## Abstention
 

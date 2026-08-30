@@ -1,0 +1,208 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chat with a PDF</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #14161a; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #2f6fed; --warn: #8a6100; --warnbg: #fff6e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --card: #1c1f25; --ink: #e9ecf1; --muted: #98a2b3;
+      --line: #2b3038; --accent: #6b9bff; --warn: #f0c674; --warnbg: #33290f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif;
+    display: flex; justify-content: center; padding: 24px 16px;
+  }
+  main { width: 100%; max-width: 720px; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  #drop {
+    border: 1.5px dashed var(--line); border-radius: 12px; padding: 32px; text-align: center;
+    cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  #drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  #drop p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+  #chat { display: none; }
+  .docbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-size: 13px; color: var(--muted); margin-bottom: 12px;
+  }
+  .docbar b { color: var(--ink); }
+  .spacer { flex: 1; }
+  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 7px 12px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  #log { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+  .msg { padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line); }
+  .msg.q { background: transparent; font-weight: 550; border-style: none; padding: 0 2px; }
+  .msg.a { background: var(--card); white-space: pre-wrap; }
+  .msg.abstain { background: var(--warnbg); border-color: transparent; color: var(--warn); }
+  .cites { margin-top: 9px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .cite {
+    font: 12px ui-monospace, monospace; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .tag { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  form { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; font: inherit; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  }
+  label.mode { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+  .err { color: #c0392b; font-size: 13px; margin-top: 10px; }
+</style>
+
+<main>
+  <h1>Chat with a PDF</h1>
+  <div class="sub">Upload a document, ask questions about it. Answers cite the page they came from, and abstain when the document doesn't cover it.</div>
+
+  <div id="upload" class="card">
+    <div id="drop">
+      <strong>Drop a PDF here</strong>
+      <p>or click to choose &middot; parsed, chunked and embedded on upload</p>
+    </div>
+    <input type="file" id="file" accept="application/pdf" hidden />
+    <div id="uploadErr" class="err" hidden></div>
+  </div>
+
+  <div id="chat">
+    <div class="docbar">
+      <span><b id="docName"></b></span>
+      <span id="docStats"></span>
+      <span class="spacer"></span>
+      <label class="mode"><input type="radio" name="mode" value="extract" checked /> Extracted</label>
+      <label class="mode"><input type="radio" name="mode" value="llm" /> LLM</label>
+      <button id="reset">New PDF</button>
+    </div>
+    <div id="log"></div>
+    <form id="ask">
+      <input type="text" id="q" placeholder="Ask something from the document…" autocomplete="off" />
+      <button class="primary" id="send">Ask</button>
+    </form>
+  </div>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let docId = null;
+
+  // ---- upload ----
+  const drop = $("drop");
+  drop.onclick = () => $("file").click();
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+  };
+  $("file").onchange = (e) => e.target.files[0] && upload(e.target.files[0]);
+
+  async function upload(file) {
+    $("uploadErr").hidden = true;
+    drop.innerHTML = "<strong>Ingesting…</strong><p>parsing, chunking, embedding</p>";
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      const r = await fetch("/ingest", { method: "POST", body });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "upload failed");
+      docId = data.doc_id;
+      $("docName").textContent = file.name;
+      $("docStats").textContent = `${data.pages} pages · ${data.chunks} chunks`;
+      $("upload").hidden = true;
+      $("chat").style.display = "block";
+      $("q").focus();
+    } catch (err) {
+      $("uploadErr").textContent = err.message;
+      $("uploadErr").hidden = false;
+      resetDrop();
+    }
+  }
+
+  function resetDrop() {
+    drop.innerHTML = "<strong>Drop a PDF here</strong><p>or click to choose &middot; parsed, chunked and embedded on upload</p>";
+  }
+
+  $("reset").onclick = () => {
+    docId = null;
+    $("log").innerHTML = "";
+    $("chat").style.display = "none";
+    $("upload").hidden = false;
+    $("file").value = "";
+    resetDrop();
+  };
+
+  // ---- chat ----
+  // Implicit form submission on Enter is standard, but don't rely on it for the primary action.
+  $("q").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      $("ask").requestSubmit();
+    }
+  });
+
+  $("ask").onsubmit = async (e) => {
+    e.preventDefault();
+    const question = $("q").value.trim();
+    if (!question || !docId) return;
+    const mode = document.querySelector("input[name=mode]:checked").value;
+    $("q").value = "";
+    add("q", question);
+    const pending = add("a", "…");
+    $("send").disabled = true;
+    try {
+      const r = await fetch("/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc_id: docId, question, mode }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "request failed");
+      render(pending, data, mode);
+    } catch (err) {
+      pending.textContent = err.message;
+      pending.className = "msg abstain";
+    } finally {
+      $("send").disabled = false;
+      $("q").focus();
+    }
+  };
+
+  function add(kind, text) {
+    const el = document.createElement("div");
+    el.className = "msg " + kind;
+    el.textContent = text;
+    $("log").append(el);
+    el.scrollIntoView({ block: "nearest" });
+    return el;
+  }
+
+  function render(el, data, requested) {
+    el.className = "msg " + (data.abstained ? "abstain" : "a");
+    el.textContent = data.answer;
+    const notes = [];
+    if (requested === "llm" && data.mode === "extract") notes.push("LLM unavailable — extracted");
+    else notes.push(data.mode === "llm" ? "LLM" : "extracted");
+    const foot = document.createElement("div");
+    foot.className = "cites";
+    for (const c of data.citations || []) {
+      const chip = document.createElement("span");
+      chip.className = "cite";
+      chip.textContent = `p.${c.page} · ${c.chunk_id}`;
+      foot.append(chip);
+    }
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = notes.join("");
+    foot.append(tag);
+    el.append(foot);
+    el.scrollIntoView({ block: "nearest" });
+  }
+</script>

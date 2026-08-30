@@ -79,6 +79,53 @@ def test_abstains_when_not_in_document(client_and_doc):
     assert body["citations"] == []
 
 
+def test_llm_mode_falls_back_to_extract_when_no_model_running(client_and_doc, monkeypatch):
+    """Asking for the LLM with nothing served must still answer, flagged as extracted."""
+    monkeypatch.setattr("llm.OllamaLLM.available", lambda self: False)
+    client, doc_id = client_and_doc
+    body = client.post(
+        "/answer",
+        json={"doc_id": doc_id, "question": "What is the refund window?", "mode": "llm"},
+    ).json()
+    assert body["mode"] == "extract"
+    assert body["abstained"] is False
+
+
+def test_llm_mode_uses_model_and_drops_invented_citations(client_and_doc, monkeypatch):
+    """A citation pointing at a chunk we never retrieved must not survive."""
+    monkeypatch.setattr("llm.OllamaLLM.available", lambda self: True)
+    monkeypatch.setattr(
+        "llm.OllamaLLM.answer",
+        lambda self, q, chunks: f"Refunds take 7 business days [{chunks[0]['chunk_id']}]. "
+        "Also the CEO earns $2M [c-9999].",
+    )
+    client, doc_id = client_and_doc
+    body = client.post(
+        "/answer",
+        json={"doc_id": doc_id, "question": "What is the refund window?", "mode": "llm"},
+    ).json()
+    assert body["mode"] == "llm"
+    assert [c["chunk_id"] for c in body["citations"]] == ["c-0001"]  # c-9999 dropped
+    assert all(c["chunk_id"] != "c-9999" for c in body["citations"])
+
+
+def test_llm_no_answer_sentinel_abstains(client_and_doc, monkeypatch):
+    monkeypatch.setattr("llm.OllamaLLM.available", lambda self: True)
+    monkeypatch.setattr("llm.OllamaLLM.answer", lambda self, q, chunks: "NO_ANSWER")
+    client, doc_id = client_and_doc
+    body = client.post(
+        "/answer",
+        json={"doc_id": doc_id, "question": "What is the refund window?", "mode": "llm"},
+    ).json()
+    assert body["abstained"] is True and body["citations"] == []
+
+
+def test_frontend_is_served(client_and_doc):
+    client, _ = client_and_doc
+    r = client.get("/")
+    assert r.status_code == 200 and "Chat with a PDF" in r.text
+
+
 def test_unknown_doc_id_404s(client_and_doc):
     client, _ = client_and_doc
     r = client.post("/answer", json={"doc_id": "nope", "question": "anything"})
